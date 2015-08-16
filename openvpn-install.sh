@@ -163,7 +163,7 @@ else
 	echo 'Welcome to this quick OpenVPN "road warrior" installer'
 	echo ""
 	# OpenVPN setup and first user creation
-	echo "I need to gateher some information for setup"
+	echo "I need to gateher some information for setup."
 	echo "You can leave the default options and just press enter if you are ok with them"
 	echo ""
 	echo "First I need the IPv4 address of the network interface you want to bind OpenVPN to"
