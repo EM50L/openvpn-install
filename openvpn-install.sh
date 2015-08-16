@@ -170,7 +170,7 @@ else
 	echo "listening to."
 	read -p "IP address: " -e -i $IP IP
 	echo ""
-	echo "What port do you want for OpenVPN to use?"
+	echo "What port do you want OpenVPN to listen on?"
 	read -p "Port: " -e -i 1194 PORT
 	echo ""
 	echo "Do you want OpenVPN to to lisren on port 53 as well?"
