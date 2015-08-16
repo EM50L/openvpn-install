@@ -178,7 +178,7 @@ else
 	read -p "Listen at port 53 [y/n]: " -e -i n ALTPORT
 	echo ""
 	echo "Do you want to enable internal networking for the VPN?"
-	echo " This will allow VPN clients to communicate between each other over the VPN"
+	echo "This will allow VPN clients to communicate between each other over the VPN"
 	read -p "Allow internal networking [y/n]: " -e -i n INTERNALNETWORK
 	echo ""
 	echo "What DNS servers do you want to use with the VPN?"
