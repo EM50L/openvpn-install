@@ -1,11 +1,11 @@
 #!/bin/bash
-# OpenVPN installer for Debian, Ubuntu and CentOS
+# OpenVPN installer for Debian, Ubuntu and CentOS 
 
-# This script will work on Debian, Ubuntu, CentOS and probably other distros
-# of the same families, although no support is offered for them. It isn't
-# bulletproof but it will probably work if you simply want to setup a VPN on
-# your Debian/Ubuntu/CentOS box. It has been designed to be as unobtrusive and
-# universal as possible.
+# This script will work on Debian, Ubuntu, CentOS and probably other distros.
+#script iss designed to be as universal as possible.
+
+
+
 
 if [[ "$USER" != 'root' ]]; then
 	echo "This requiers root privileges"
@@ -53,7 +53,7 @@ newclient () {
 
 
 # Try to get IP from system and fallback to the Internet.
-# Needed make the script compatible with NATed servers (AWS)
+# Needed to make the script compatible with NATed servers (AWS)
 # and to avoid getting an IPv6.
 IP=$(ip addr | grep 'inet' | grep -v inet6 | grep -vE '127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | grep -o -E '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | head -1)
 if [[ "$IP" = "" ]]; then
@@ -106,16 +106,11 @@ if [[ -e /etc/openvpn/server.conf ]]; then
 			cd /etc/openvpn/easy-rsa/
 			./easyrsa --batch revoke $CLIENT
 			./easyrsa gen-crl
-			# And restart
-			if pgrep systemd-journal; then
-				systemctl restart openvpn@server.service
-			else
-				if [[ "$OS" = 'debian' ]]; then
-					/etc/init.d/openvpn restart
-				else
-					service openvpn restart
-				fi
-			fi
+			rm -rf pki/reqs/$CLIENT.req
+			rm -rf pki/private/$CLIENT.key
+			rm -rf pki/issued/$CLIENT.crt
+			rm -rf /etc/openvpn/crl.pem
+			cp /etc/openvpn/easy-rsa/pki/crl.pem /etc/openvpn/crl.pem
 			echo ""
 			echo "Certificate for client $CLIENT revoked"
 			exit
@@ -138,6 +133,13 @@ if [[ -e /etc/openvpn/server.conf ]]; then
 					sed -i "/iptables -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT/d" $RCLOCAL
 				fi
 				sed -i '/iptables -t nat -A POSTROUTING -s 10.8.0.0\/24 -j SNAT --to /d' $RCLOCAL
+				if hash sestatus 2>/dev/null; then
+					if sestatus | grep "Current mode" | grep -qs "enforcing"; then
+						if [[ "$PORT" != '1194' ]]; then
+							semanage port -d -t openvpn_port_t -p udp $PORT
+						fi
+					fi
+				fi
 				if [[ "$OS" = 'debian' ]]; then
 					apt-get remove --purge -y openvpn openvpn-blacklist
 				else
@@ -198,13 +200,13 @@ else
 	if [[ -d /etc/openvpn/easy-rsa/ ]]; then
 		rm -rf /etc/openvpn/easy-rsa/
 	fi
-	# Get easy-rsa
-	wget --no-check-certificate -O ~/EasyRSA-3.0.0.tgz https://github.com/OpenVPN/easy-rsa/releases/download/3.0.0/EasyRSA-3.0.0.tgz
-	tar xzf ~/EasyRSA-3.0.0.tgz -C ~/
-	mv ~/EasyRSA-3.0.0/ /etc/openvpn/
-	mv /etc/openvpn/EasyRSA-3.0.0/ /etc/openvpn/easy-rsa/
+	# get easy-rsa
+	wget -O ~/EasyRSA-3.0.1.tgz https://github.com/OpenVPN/easy-rsa/releases/download/3.0.1/EasyRSA-3.0.1.tgz
+	tar xzf ~/EasyRSA-3.0.1.tgz -C ~/
+	mv ~/EasyRSA-3.0.1/ /etc/openvpn/
+	mv /etc/openvpn/EasyRSA-3.0.1/ /etc/openvpn/easy-rsa/
 	chown -R root:root /etc/openvpn/easy-rsa/
-	rm -rf ~/EasyRSA-3.0.0.tgz
+	rm -rf ~/EasyRSA-3.0.1.tgz
 	cd /etc/openvpn/easy-rsa/
 	# Create the PKI, set up the CA, the DH params and the server + client certificates
 	./easyrsa init-pki
@@ -214,7 +216,7 @@ else
 	./easyrsa build-client-full $CLIENT nopass
 	./easyrsa gen-crl
 	# Move the stuff we need
-	cp pki/ca.crt pki/private/ca.key pki/dh.pem pki/issued/server.crt pki/private/server.key /etc/openvpn
+	cp pki/ca.crt pki/private/ca.key pki/dh.pem pki/issued/server.crt pki/private/server.key /etc/openvpn/easy-rsa/pki/crl.pem /etc/openvpn
 	# Generate server.conf
 	echo "port $PORT
 proto udp
@@ -261,7 +263,7 @@ persist-key
 persist-tun
 status openvpn-status.log
 verb 3
-crl-verify /etc/openvpn/easy-rsa/pki/crl.pem" >> /etc/openvpn/server.conf
+crl-verify crl.pem" >> /etc/openvpn/server.conf
 	# Enable net.ipv4.ip_forward for the system
 	if [[ "$OS" = 'debian' ]]; then
 		sed -i 's|#net.ipv4.ip_forward=1|net.ipv4.ip_forward=1|' /etc/sysctl.conf
@@ -287,7 +289,7 @@ crl-verify /etc/openvpn/easy-rsa/pki/crl.pem" >> /etc/openvpn/server.conf
 		firewall-cmd --permanent --zone=public --add-port=$PORT/udp
 		firewall-cmd --permanent --zone=trusted --add-source=10.8.0.0/24
 	fi
-	if iptables -L | grep -q REJECT; then
+	if iptables -L | grep -qE 'REJECT|DROP'; then
 		# If iptables has at least one REJECT rule, we asume this is needed.
 		# Not the best approach but I can't think of other and this shouldn't
 		# cause problems.
@@ -298,6 +300,18 @@ crl-verify /etc/openvpn/easy-rsa/pki/crl.pem" >> /etc/openvpn/server.conf
 		sed -i "1 a\iptables -I FORWARD -s 10.8.0.0/24 -j ACCEPT" $RCLOCAL
 		sed -i "1 a\iptables -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT" $RCLOCAL
 	fi
+	# Some SELinux stuff
+	if hash sestatus 2>/dev/null; then
+		if sestatus | grep "Current mode" | grep -qs "enforcing"; then
+			if [[ "$PORT" != '1194' ]]; then
+				# semanage isn't available in CentOS 6 by default
+				if ! hash semanage 2>/dev/null; then
+					yum install policycoreutils-python -y
+				fi
+				semanage port -a -t openvpn_port_t -p udp $PORT
+			fi
+		fi
+	fi	
 	# And finally, restart OpenVPN
 	if [[ "$OS" = 'debian' ]]; then
 		# Little hack to check for systemd
@@ -315,7 +329,7 @@ crl-verify /etc/openvpn/easy-rsa/pki/crl.pem" >> /etc/openvpn/server.conf
 			chkconfig openvpn on
 		fi
 	fi
-	# Try to detect a NATed connection and ask about it to potential LowEndSpirit users
+	# Try to detect a NATed connection and ask about it to potential AWS users
 	EXTERNALIP=$(wget -qO- ipv4.icanhazip.com)
 	if [[ "$IP" != "$EXTERNALIP" ]]; then
 		echo ""
