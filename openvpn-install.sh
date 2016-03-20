@@ -335,7 +335,8 @@ crl-verify crl.pem" >> /etc/openvpn/server.conf
 		echo ""
 		echo "Your server appears to behind a NAT"
 		echo ""
-		echo "If server is NATed (AWS), provide the external IP address"
+		echo "If server is NATed (AWS), provide the public IP address"
+		echo "I have detected this as your Public IP $EXTERNALIP"
 		echo "If not behind NAT, ignore this and leave the next field blank"
 		read -p "External IP: " -e USEREXTERNALIP
 		if [[ "$USEREXTERNALIP" != "" ]]; then
