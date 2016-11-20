@@ -2,39 +2,42 @@
 # OpenVPN installer for Debian, Ubuntu and CentOS 
 
 # This script will work on Debian, Ubuntu, CentOS and probably other distros.
-#script iss designed to be as universal as possible.
+#script is designed to be as universal as possible.
 
 
-
-
-if [[ "$USER" != 'root' ]]; then
-	echo "This requiers root privileges"
-	exit
+# Detect Debian users running the script with "sh" instead of bash
+if readlink /proc/$$/exe | grep -qs "dash"; then
+	echo "This script needs to be run with bash, not sh"
+	exit 1
 fi
 
+if [[ "$EUID" -ne 0 ]]; then
+	echo "Sorry, you must be root to run this"
+	exit 2
+fi
 
 if [[ ! -e /dev/net/tun ]]; then
-	echo "TUN/TAP is not available"
-	exit
+	echo "TUN is not available"
+	exit 3
 fi
-
 
 if grep -qs "CentOS release 5" "/etc/redhat-release"; then
-	echo "CentOS 5 not supported"
-	exit
+	echo "CentOS 5 is too old and not supported"
+	exit 4
 fi
-
 if [[ -e /etc/debian_version ]]; then
 	OS=debian
+	GROUPNAME=nogroup
 	RCLOCAL='/etc/rc.local'
 elif [[ -e /etc/centos-release || -e /etc/redhat-release ]]; then
 	OS=centos
+	GROUPNAME=nobody
 	RCLOCAL='/etc/rc.d/rc.local'
 	# Needed for CentOS 7
 	chmod +x /etc/rc.d/rc.local
 else
 	echo "OS is not supported please run on Debian, Ubuntu or CentOS"
-	exit
+	exit 5
 fi
 
 newclient () {
@@ -49,8 +52,10 @@ newclient () {
 	echo "<key>" >> ~/$1.ovpn
 	cat /etc/openvpn/easy-rsa/pki/private/$1.key >> ~/$1.ovpn
 	echo "</key>" >> ~/$1.ovpn
+	echo "<tls-auth>" >> ~/$1.ovpn
+	cat /etc/openvpn/ta.key >> ~/$1.ovpn
+	echo "</tls-auth>" >> ~/$1.ovpn
 }
-
 
 # Try to get IP from system and fallback to the Internet.
 # Needed to make the script compatible with NATed servers (AWS)
@@ -60,7 +65,6 @@ if [[ "$IP" = "" ]]; then
 		IP=$(wget -qO- ipv4.icanhazip.com)
 fi
 
-
 if [[ -e /etc/openvpn/server.conf ]]; then
 	while :
 	do
@@ -68,7 +72,7 @@ if [[ -e /etc/openvpn/server.conf ]]; then
 		echo "OpenVPN is already installed"
 		echo ""
 		echo "What do you want to do?"
-		echo "   1) Create a cert for a new user"
+		echo "   1) Add a cert for a new user"
 		echo "   2) Revoke existing user cert"
 		echo "   3) Remove OpenVPN"
 		echo "   4) Exit"
@@ -77,11 +81,11 @@ if [[ -e /etc/openvpn/server.conf ]]; then
 			1) 
 			echo ""
 			echo "Give name for the client cert"
-			echo "No special characters or spaces."
+			echo "No special characters or spaces"
 			read -p "Client name: " -e -i client CLIENT
 			cd /etc/openvpn/easy-rsa/
 			./easyrsa build-client-full $CLIENT nopass
-			# Generate custom client.ovpn
+			# Generates the custom client.ovpn
 			newclient "$CLIENT"
 			echo ""
 			echo "Client $CLIENT created, certs available at ~/$CLIENT.ovpn"
@@ -92,10 +96,10 @@ if [[ -e /etc/openvpn/server.conf ]]; then
 			if [[ "$NUMBEROFCLIENTS" = '0' ]]; then
 				echo ""
 				echo "No existing clients found!"
-				exit
+				exit 6
 			fi
 			echo ""
-			echo "Select the existing client certificate you want to revoke"
+		    echo "Select the existing client certificate you want to revoke"
 			tail -n +2 /etc/openvpn/easy-rsa/pki/index.txt | grep "^V" | cut -d '=' -f 2 | nl -s ') '
 			if [[ "$NUMBEROFCLIENTS" = '1' ]]; then
 				read -p "Select one client [1]: " CLIENTNUMBER
@@ -111,13 +115,15 @@ if [[ -e /etc/openvpn/server.conf ]]; then
 			rm -rf pki/issued/$CLIENT.crt
 			rm -rf /etc/openvpn/crl.pem
 			cp /etc/openvpn/easy-rsa/pki/crl.pem /etc/openvpn/crl.pem
+			# Force read of CRL with  each client connection
+			chown nobody:$GROUPNAME /etc/openvpn/crl.pem
 			echo ""
-			echo "Certificate for client $CLIENT revoked"
+			echo "Certificate for client $CLIENT has been revoked"
 			exit
 			;;
 			3) 
 			echo ""
-			read -p "Are you sure you want to remove OpenVPN? [y/n]: " -e -i n REMOVE
+			read -p "Do you really want to remove OpenVPN? [y/n]: " -e -i n REMOVE
 			if [[ "$REMOVE" = 'y' ]]; then
 				PORT=$(grep '^port ' /etc/openvpn/server.conf | cut -d " " -f 2)
 				if pgrep firewalld; then
@@ -127,7 +133,7 @@ if [[ -e /etc/openvpn/server.conf ]]; then
 					firewall-cmd --permanent --zone=public --remove-port=$PORT/udp
 					firewall-cmd --permanent --zone=trusted --remove-source=10.8.0.0/24
 				fi
-				if iptables -L | grep -q REJECT; then
+				if iptables -L -n | grep -qE 'REJECT|DROP'; then
 					sed -i "/iptables -I INPUT -p udp --dport $PORT -j ACCEPT/d" $RCLOCAL
 					sed -i "/iptables -I FORWARD -s 10.8.0.0\/24 -j ACCEPT/d" $RCLOCAL
 					sed -i "/iptables -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT/d" $RCLOCAL
@@ -190,17 +196,17 @@ else
 	read -n1 -r -p "Press any key to continue..."
 		if [[ "$OS" = 'debian' ]]; then
 		apt-get update
-		apt-get install openvpn iptables openssl -y
+		apt-get install openvpn iptables openssl ca-certificates -y
 	else
-		# Else, the distro is CentOS
+		# distro is CentOS
 		yum install epel-release -y
-		yum install openvpn iptables openssl wget -y
+		yum install openvpn iptables openssl wget ca-certificates -y
 	fi
-	# An old version of easy-rsa was available by default in some openvpn packages
+	# Remove old version of easy-rsa that was available by default in some openvpn packages
 	if [[ -d /etc/openvpn/easy-rsa/ ]]; then
 		rm -rf /etc/openvpn/easy-rsa/
 	fi
-	# get easy-rsa
+	# Get easy-rsa
 	wget -O ~/EasyRSA-3.0.1.tgz https://github.com/OpenVPN/easy-rsa/releases/download/3.0.1/EasyRSA-3.0.1.tgz
 	tar xzf ~/EasyRSA-3.0.1.tgz -C ~/
 	mv ~/EasyRSA-3.0.1/ /etc/openvpn/
@@ -217,14 +223,21 @@ else
 	./easyrsa gen-crl
 	# Move the stuff we need
 	cp pki/ca.crt pki/private/ca.key pki/dh.pem pki/issued/server.crt pki/private/server.key /etc/openvpn/easy-rsa/pki/crl.pem /etc/openvpn
+	# CRL is read with each client connection, when OpenVPN is dropped to nobody
+	chown nobody:$GROUPNAME /etc/openvpn/crl.pem
+	# Generate key for tls-auth
+	openvpn --genkey --secret /etc/openvpn/ta.key
 	# Generate server.conf
 	echo "port $PORT
 proto udp
 dev tun
+sndbuf 0
+rcvbuf 0
 ca ca.crt
 cert server.crt
 key server.key
 dh dh.pem
+tls-auth ta.key 0
 topology subnet
 server 10.8.0.0 255.255.255.0
 ifconfig-pool-persist ipp.txt" > /etc/openvpn/server.conf
@@ -258,22 +271,19 @@ ifconfig-pool-persist ipp.txt" > /etc/openvpn/server.conf
 		;;
 	esac
 	echo "keepalive 10 120
+cipher AES-128-CBC
 comp-lzo
+user nobody
+group $GROUPNAME
 persist-key
 persist-tun
 status openvpn-status.log
 verb 3
 crl-verify crl.pem" >> /etc/openvpn/server.conf
 	# Enable net.ipv4.ip_forward for the system
-	if [[ "$OS" = 'debian' ]]; then
-		sed -i 's|#net.ipv4.ip_forward=1|net.ipv4.ip_forward=1|' /etc/sysctl.conf
-	else
-		# CentOS 5 and 6
-		sed -i 's|net.ipv4.ip_forward = 0|net.ipv4.ip_forward = 1|' /etc/sysctl.conf
-		# CentOS 7
-		if ! grep -q "net.ipv4.ip_forward=1" "/etc/sysctl.conf"; then
-			echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
-		fi
+	sed -i '/\<net.ipv4.ip_forward\>/c\net.ipv4.ip_forward=1' /etc/sysctl.conf
+	if ! grep -q "\<net.ipv4.ip_forward\>" /etc/sysctl.conf; then
+		echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
 	fi
 	# Avoid an unneeded reboot
 	echo 1 > /proc/sys/net/ipv4/ip_forward
@@ -289,7 +299,7 @@ crl-verify crl.pem" >> /etc/openvpn/server.conf
 		firewall-cmd --permanent --zone=public --add-port=$PORT/udp
 		firewall-cmd --permanent --zone=trusted --add-source=10.8.0.0/24
 	fi
-	if iptables -L | grep -qE 'REJECT|DROP'; then
+	if iptables -L -n | grep -qE 'REJECT|DROP'; then
 		# If iptables has at least one REJECT rule, we asume this is needed.
 		# Not the best approach but I can't think of other and this shouldn't
 		# cause problems.
@@ -311,10 +321,10 @@ crl-verify crl.pem" >> /etc/openvpn/server.conf
 				semanage port -a -t openvpn_port_t -p udp $PORT
 			fi
 		fi
-	fi	
+	fi
 	# And finally, restart OpenVPN
 	if [[ "$OS" = 'debian' ]]; then
-		# Little hack to check for systemd
+		# hack to check for systemd
 		if pgrep systemd-journal; then
 			systemctl restart openvpn@server.service
 		else
@@ -347,13 +357,18 @@ crl-verify crl.pem" >> /etc/openvpn/server.conf
 	echo "client
 dev tun
 proto udp
+sndbuf 0
+rcvbuf 0
 remote $IP $PORT
 resolv-retry infinite
 nobind
 persist-key
 persist-tun
 remote-cert-tls server
+cipher AES-128-CBC
 comp-lzo
+setenv opt block-outside-dns
+key-direction 1
 verb 3" > /etc/openvpn/client-common.txt
 	# Generates the custom client.ovpn
 	newclient "$CLIENT"
