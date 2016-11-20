@@ -200,7 +200,7 @@ else
 	else
 		# distro is CentOS
 		wget https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm
-		yum install epel-release-7.noarch.rpm -y
+		yum install epel-release-* -y
 		yum install openvpn iptables openssl wget ca-certificates -y
 	fi
 	# Remove old version of easy-rsa that was available by default in some openvpn packages
